@@ -128,25 +128,6 @@ services:
       - ${QWEN_MM_EMBED_GPU_MEMORY_UTILIZATION:-0.70}
       - --trust-remote-code
 
-  qwen_rerank:
-    <<: *vllm-common
-    ports:
-      - "8004:8000"
-    environment:
-      - CUDA_VISIBLE_DEVICES=${QWEN_RERANK_CUDA_VISIBLE_DEVICES:-0}
-      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-    command:
-      - ${QWEN_RERANK_MODEL_DIR:-/data/qwen3-reranker-0.6b}
-      - --served-model-name
-      - ${QWEN_RERANK_MODEL_NAME:-Qwen/Qwen3-Reranker-0.6B}
-      - --runner
-      - pooling
-      - --max-model-len
-      - ${QWEN_RERANK_MAX_MODEL_LEN:-4096}
-      - --gpu-memory-utilization
-      - ${QWEN_RERANK_GPU_MEMORY_UTILIZATION:-0.10}
-      - --trust-remote-code
-
 volumes:
   esdata:
   qdrantdata:

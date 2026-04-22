@@ -6,13 +6,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-THINK_BLOCK_RE = re.compile(
-    r"<\s*think(?:ing)?\b[^>]*>.*?<\s*/\s*think(?:ing)?\s*>",
-    flags=re.IGNORECASE | re.DOTALL,
-)
-THINK_OPEN_RE = re.compile(r"<\s*think(?:ing)?\b[^>]*>", flags=re.IGNORECASE)
-THINK_CLOSE_RE = re.compile(r"<\s*/\s*think(?:ing)?\s*>", flags=re.IGNORECASE)
-
 # Patterns that indicate untagged thinking/reasoning leaked into the output.
 _UNTAGGED_THINKING_RE = re.compile(
     r"^(?:Got it|Okay|Alright|Sure|Let me|Let's|So,?\s|First,?\s|Looking at|The question|The user|The evidence|The answer|The problem|I need to|I'll|Let us|Hmm)",
@@ -400,15 +393,3 @@ def chunk_page(
         )
 
     return chunks
-
-def candidate_to_rerank_document(hit: dict) -> str:
-    parts = [
-        f"Page: {hit.get('page_no', 0)}",
-        f"Page title: {hit.get('page_title') or '(none)'}",
-        f"Section: {hit.get('section_path') or '(none)'}",
-        f"Page proxy: {hit.get('page_proxy_text') or '(none)'}",
-        f"Contextual chunk: {hit.get('contextual_chunk_text') or '(none)'}",
-        f"Raw chunk text: {hit.get('text_raw') or '(none)'}",
-        f"Sources: {', '.join(hit.get('sources', [])) or '(none)'}",
-    ]
-    return "\n".join(parts)

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 from pathlib import Path
 
 import httpx
@@ -68,10 +67,6 @@ class RuntimeClients:
             trust_env=should_trust_env(settings.qwen_multimodal_embed_base_url),
             timeout=180.0,
         )
-        self.rerank_client = httpx.AsyncClient(
-            trust_env=should_trust_env(settings.qwen_rerank_base_url),
-            timeout=180.0,
-        )
 
     async def close(self) -> None:
         await self.es.close()
@@ -79,36 +74,6 @@ class RuntimeClients:
         await self.embed_client.close()
         await self.vllm_client.close()
         await self.multimodal_client.aclose()
-        await self.rerank_client.aclose()
-
-
-class WeaveTracker:
-    def __init__(self, settings: Settings):
-        self.enabled = False
-        self.weave = None
-        if os.getenv("WEAVE_DISABLED", "").strip().lower() in {"1", "true", "yes", "y", "on"}:
-            logger.info("Weave explicitly disabled by WEAVE_DISABLED.")
-            return
-        try:
-            import weave  # type: ignore
-
-            self.weave = weave
-            if settings.wandb_api_key and not os.environ.get("WANDB_API_KEY"):
-                os.environ["WANDB_API_KEY"] = settings.wandb_api_key
-            project_path = settings.weave_project
-            weave.init(project_path)
-            self.enabled = True
-            logger.info("Weave initialized: %s", project_path)
-        except Exception as exc:
-            logger.warning("Weave init skipped: %s", exc)
-
-    def publish(self, payload: dict, name: str) -> None:
-        if not self.enabled or self.weave is None:
-            return
-        try:
-            self.weave.publish(payload, name=name)
-        except Exception:
-            logger.exception("Weave publish failed")
 
 
 def _prepend_instruction(texts: list[str], instruction: str) -> list[str]:
@@ -140,25 +105,6 @@ def _extract_embedding_rows(payload: dict) -> list[list[float]]:
         if rows:
             return rows
     raise ValueError(f"Unsupported embedding response payload: {payload}")
-
-
-def _extract_rerank_rows(payload: dict) -> list[dict]:
-    if isinstance(payload.get("results"), list):
-        rows = payload["results"]
-    elif isinstance(payload.get("data"), list):
-        rows = payload["data"]
-    else:
-        raise ValueError(f"Unsupported rerank response payload: {payload}")
-
-    parsed: list[dict] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        index = row.get("index")
-        score = row.get("relevance_score", row.get("score"))
-        if isinstance(index, int) and isinstance(score, (int, float)):
-            parsed.append({"index": index, "relevance_score": float(score)})
-    return parsed
 
 
 async def embed_texts(runtime: RuntimeClients, settings: Settings, texts: list[str], input_type: str) -> list[list[float]]:
@@ -266,39 +212,6 @@ async def embed_images(
     except Exception as exc:
         errors.append(f"{openai_url}: {exc}")
         raise RuntimeError("Qwen multimodal image embedding request failed: " + " | ".join(errors)) from exc
-
-
-async def rerank_documents(
-    runtime: RuntimeClients,
-    settings: Settings,
-    query: str,
-    documents: list[str],
-    top_k: int,
-) -> list[dict]:
-    rerank_query = query
-    if settings.qwen_rerank_query_instruction.strip():
-        rerank_query = f"{settings.qwen_rerank_query_instruction.strip()}\n{query}"
-
-    payload = {
-        "model": settings.qwen_rerank_model,
-        "query": rerank_query,
-        "documents": documents,
-        "top_k": top_k,
-    }
-    headers = {}
-    if settings.qwen_rerank_api_key:
-        headers["Authorization"] = f"Bearer {settings.qwen_rerank_api_key}"
-
-    errors: list[str] = []
-    for endpoint in ("rerank", "v1/rerank"):
-        url = f"{normalize_base_url(settings.qwen_rerank_base_url)}/{endpoint}"
-        try:
-            response = await runtime.rerank_client.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            return _extract_rerank_rows(response.json())
-        except Exception as exc:
-            errors.append(f"{url}: {exc}")
-    raise RuntimeError("Qwen rerank request failed: " + " | ".join(errors))
 
 
 async def vllm_chat(

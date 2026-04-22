@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 
-from .clients import RuntimeClients, WeaveTracker
+from .clients import RuntimeClients
 from .config import Settings
 from .pipeline import build_offline, run_eval
 
@@ -28,12 +28,6 @@ def parse_args() -> argparse.Namespace:
     eval_parser.add_argument("--variant", choices=["baseline", "enhanced"], required=True)
     eval_parser.add_argument("--max-samples", type=int, default=None)
     eval_parser.add_argument("--run-name", default=None)
-    eval_parser.add_argument(
-        "--with-ragas",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable RAGAS evaluation (default: enabled).",
-    )
 
     run_parser = subparsers.add_parser("run", help="Build + eval for one variant")
     run_parser.add_argument("--variant", choices=["baseline", "enhanced"], required=True)
@@ -41,12 +35,6 @@ def parse_args() -> argparse.Namespace:
     run_parser.add_argument("--rebuild", action="store_true")
     run_parser.add_argument("--corpus-limit", type=int, default=None)
     run_parser.add_argument("--run-name", default=None)
-    run_parser.add_argument(
-        "--with-ragas",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable RAGAS evaluation (default: enabled).",
-    )
 
     return parser.parse_args()
 
@@ -56,7 +44,6 @@ async def _main() -> int:
     settings = Settings.from_env()
     settings.ensure_dirs()
 
-    tracker = WeaveTracker(settings)
     runtime = RuntimeClients(settings)
 
     try:
@@ -64,7 +51,6 @@ async def _main() -> int:
             summary = await build_offline(
                 runtime,
                 settings,
-                tracker,
                 variant=args.variant,
                 max_samples=args.max_samples,
                 rebuild=args.rebuild,
@@ -77,11 +63,9 @@ async def _main() -> int:
             summary = await run_eval(
                 runtime,
                 settings,
-                tracker,
                 variant=args.variant,
                 max_samples=args.max_samples,
                 run_name=args.run_name,
-                with_ragas=args.with_ragas,
             )
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return 0
@@ -90,7 +74,6 @@ async def _main() -> int:
             build_summary = await build_offline(
                 runtime,
                 settings,
-                tracker,
                 variant=args.variant,
                 max_samples=args.max_samples,
                 rebuild=args.rebuild,
@@ -99,11 +82,9 @@ async def _main() -> int:
             eval_summary = await run_eval(
                 runtime,
                 settings,
-                tracker,
                 variant=args.variant,
                 max_samples=args.max_samples,
                 run_name=args.run_name,
-                with_ragas=args.with_ragas,
             )
             print(json.dumps({"build": build_summary, "eval": eval_summary}, ensure_ascii=False, indent=2))
             return 0

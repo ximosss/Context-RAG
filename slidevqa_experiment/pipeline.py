@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import logging
-import math
 import re
 import time
 import uuid
@@ -14,14 +12,12 @@ from qdrant_client import models as qdrant_models
 
 from .clients import (
     RuntimeClients,
-    WeaveTracker,
     bm25_search,
     embed_images,
     embed_multimodal_texts,
     embed_texts,
     ensure_storage,
     qdrant_search,
-    rerank_documents,
     vllm_chat,
 )
 from .config import Settings
@@ -29,7 +25,6 @@ from .prompts import ANSWER_PROMPT, ANSWER_REWRITE_PROMPT, CONTEXTUAL_CHUNK_PROM
 from .schemas import Chunk, EvalSample, PageRecord
 from .utils import (
     approx_tokens,
-    candidate_to_rerank_document,
     clean_generated_text,
     chunk_page,
     extract_short_answer,
@@ -37,31 +32,16 @@ from .utils import (
     is_noise_chunk,
     looks_like_reasoning_leak,
     read_jsonl,
-    should_trust_env,
     strip_answer_citations,
-    write_jsonl,
 )
 
 logger = logging.getLogger("slidevqa_experiment")
 
-RAGAS_METRIC_NAMES = [
-    "faithfulness",
-    "answer_relevancy",
-    "context_precision",
-    "context_recall",
-    "answer_correctness",
-]
-
-RERANK_DOCUMENT_TOKEN_BUDGET = 500
 ANSWER_MAX_HITS = 1
 ANSWER_MAX_CHUNKS_PER_HIT = 1
 ANSWER_MAX_IMAGES = 1
 ANSWER_PROMPT_TOKEN_BUDGET = 6000
 ANSWER_RAW_TOKEN_BUDGET = 300
-RAGAS_MAX_CONTEXTS = 3
-RAGAS_CONTEXT_TOKEN_BUDGET = 300
-RAGAS_RESPONSE_TOKEN_BUDGET = 200
-RAGAS_REFERENCE_TOKEN_BUDGET = 80
 
 
 def _positive_int(value: int, fallback: int = 1) -> int:
@@ -84,32 +64,6 @@ def _truncate_to_token_budget(text: str, token_budget: int) -> str:
     return " ".join(words[:token_budget]).strip()
 
 
-def _fit_blocks_to_token_budget(blocks: list[str], token_budget: int, min_remaining: int = 32) -> list[str]:
-    if token_budget <= 0:
-        return []
-    selected: list[str] = []
-    used = 0
-    for block in blocks:
-        normalized = str(block or "").strip()
-        if not normalized:
-            continue
-        block_tokens = approx_tokens(normalized)
-        if block_tokens <= 0:
-            continue
-        if used + block_tokens <= token_budget:
-            selected.append(normalized)
-            used += block_tokens
-            continue
-        remaining = token_budget - used
-        if remaining < min_remaining:
-            break
-        trimmed = _truncate_to_token_budget(normalized, token_budget=remaining)
-        if trimmed:
-            selected.append(trimmed)
-        break
-    return selected
-
-
 def _source_rrf_weight(settings: Settings, source: str) -> float:
     if source == "bm25":
         return max(0.0, float(settings.bm25_rrf_weight))
@@ -122,50 +76,6 @@ def _source_rrf_weight(settings: Settings, source: str) -> float:
     if source == "page_proxy_dense":
         return max(0.0, float(settings.proxy_dense_rrf_weight))
     return 1.0
-
-
-class _RagasRelevancyEmbeddingAdapter:
-    """Adapter for older RAGAS answer_relevancy metric expecting LangChain-style methods."""
-
-    def __init__(self, embeddings: object):
-        self._embeddings = embeddings
-
-    def embed_query(self, text: str) -> list[float]:
-        if hasattr(self._embeddings, "embed_query"):
-            return self._embeddings.embed_query(text)  # type: ignore[attr-defined]
-        if hasattr(self._embeddings, "embed_text"):
-            return self._embeddings.embed_text(text)  # type: ignore[attr-defined]
-        raise AttributeError("Embedding object has neither embed_query nor embed_text")
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        if hasattr(self._embeddings, "embed_documents"):
-            return self._embeddings.embed_documents(texts)  # type: ignore[attr-defined]
-        if hasattr(self._embeddings, "embed_texts"):
-            return self._embeddings.embed_texts(texts)  # type: ignore[attr-defined]
-        return [self.embed_query(text) for text in texts]
-
-
-def _normalize_whitespace(text: str) -> str:
-    return " ".join(str(text or "").split())
-
-
-def _compact_ragas_context(hit: dict, token_budget: int) -> str:
-    page_no = int(hit.get("page_no", 0) or 0)
-    title = _normalize_whitespace(str(hit.get("page_title") or "(none)"))
-    section = _normalize_whitespace(str(hit.get("section_path") or "(none)"))
-    raw_text = _normalize_whitespace(_truncate_to_token_budget(str(hit.get("text_raw") or ""), token_budget=max(40, token_budget - 40)))
-    contextual_text = _normalize_whitespace(
-        _truncate_to_token_budget(str(hit.get("contextual_chunk_text") or ""), token_budget=max(24, token_budget // 3))
-    )
-    parts = [
-        f"Page: {page_no}",
-        f"Title: {title}",
-        f"Section: {section}",
-        f"Text: {raw_text or '(none)'}",
-    ]
-    if contextual_text:
-        parts.append(f"Context: {contextual_text}")
-    return _truncate_to_token_budget("\n".join(parts), token_budget=token_budget)
 
 
 def _dedupe_non_empty(values: list[str] | None, limit: int | None = None) -> list[str]:
@@ -461,7 +371,6 @@ async def ocr_page(
 async def build_offline(
     runtime: RuntimeClients,
     settings: Settings,
-    tracker: WeaveTracker,
     variant: str,
     max_samples: int | None,
     rebuild: bool,
@@ -839,7 +748,6 @@ async def build_offline(
         "built_at": int(time.time()),
     }
     (artifact_dir / "manifest.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    tracker.publish(summary, name=f"build-{variant}")
     return summary
 
 
@@ -990,37 +898,6 @@ async def retrieve(
     }
 
 
-async def rerank_candidates(runtime: RuntimeClients, settings: Settings, query: str, fused_hits: list[dict]) -> list[dict]:
-    if not fused_hits:
-        return []
-    top_k = settings.rerank_top_k
-    if not settings.use_reranker:
-        return fused_hits[:top_k]
-    # Keep each rerank candidate compact to avoid endpoint max-length 400 errors.
-    documents = [
-        _truncate_to_token_budget(candidate_to_rerank_document(hit), token_budget=RERANK_DOCUMENT_TOKEN_BUDGET)
-        for hit in fused_hits
-    ]
-    try:
-        results = await rerank_documents(runtime, settings, query=query, documents=documents, top_k=top_k)
-        reranked: list[dict] = []
-        for row in results:
-            index = int(row["index"])
-            if index < 0 or index >= len(fused_hits):
-                continue
-            hit = fused_hits[index]
-            hit = dict(hit)
-            hit["score"] = row["relevance_score"]
-            reranked.append(hit)
-        if not reranked:
-            return fused_hits[:top_k]
-        reranked.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
-        return reranked[:top_k]
-    except Exception:
-        logger.exception("Rerank failed, fallback to fused order")
-        return fused_hits[:top_k]
-
-
 async def generate_answer(runtime: RuntimeClients, settings: Settings, query: str, hits: list[dict]) -> dict:
     hits_for_answer = hits[: max(1, min(ANSWER_MAX_HITS, len(hits)))]
     chunk_evidence_blocks: list[str] = []
@@ -1155,186 +1032,12 @@ async def finalize_prediction(
     return initial
 
 
-def _to_finite_float(value: object) -> float | None:
-    if not isinstance(value, (int, float)):
-        return None
-    numeric = float(value)
-    if math.isnan(numeric) or math.isinf(numeric):
-        return None
-    return numeric
-
-
-def _build_ragas_contexts(hits: list[dict]) -> list[str]:
-    contexts: list[str] = []
-    seen: set[str] = set()
-    for hit in hits[:RAGAS_MAX_CONTEXTS]:
-        context = _compact_ragas_context(hit, token_budget=RAGAS_CONTEXT_TOKEN_BUDGET).strip()
-        if context and context not in seen:
-            seen.add(context)
-            contexts.append(context)
-    return contexts
-
-
-async def _run_ragas_eval(settings: Settings, run_id: str, ragas_samples: list[dict], sample_ids: list[str]) -> dict:
-    if not ragas_samples:
-        return {
-            "enabled": False,
-            "aggregate": {},
-            "per_sample": [],
-            "results_path": "",
-            "error": "No samples for RAGAS evaluation.",
-        }
-
-    try:
-        import warnings
-
-        import httpx
-        from openai import AsyncOpenAI
-        from ragas import EvaluationDataset, aevaluate
-        from ragas.embeddings.base import embedding_factory
-        from ragas.llms import llm_factory
-        from ragas.metrics import answer_correctness, answer_relevancy, context_precision, context_recall, faithfulness
-        from ragas.run_config import RunConfig
-    except Exception as exc:
-        return {
-            "enabled": False,
-            "aggregate": {},
-            "per_sample": [],
-            "results_path": "",
-            "error": f"RAGAS dependencies unavailable: {exc}",
-        }
-
-    ragas_llm_base_url = settings.ragas_llm_base_url.strip() or settings.vllm_base_url
-    ragas_llm_model_name = settings.ragas_llm_model_name.strip() or settings.vllm_model_name
-
-    llm_client = AsyncOpenAI(
-        base_url=ragas_llm_base_url,
-        api_key="EMPTY",
-        http_client=httpx.AsyncClient(trust_env=should_trust_env(ragas_llm_base_url), timeout=180.0),
-    )
-    embedding_client = AsyncOpenAI(
-        base_url=settings.qwen_embed_base_url,
-        api_key=settings.qwen_embed_api_key or "EMPTY",
-        http_client=httpx.AsyncClient(trust_env=should_trust_env(settings.qwen_embed_base_url), timeout=120.0),
-    )
-
-    try:
-        ragas_llm = llm_factory(
-            model=ragas_llm_model_name,
-            provider="openai",
-            client=llm_client,
-            temperature=0.0,
-            max_tokens=256,
-            max_retries=1,
-            top_p=0.1,
-        )
-        ragas_embeddings = embedding_factory(
-            provider="openai",
-            model=settings.qwen_embed_model,
-            client=embedding_client,
-        )
-        if "vl" in ragas_llm_model_name.lower():
-            message = (
-                f"Skipping RAGAS because multimodal judge model '{ragas_llm_model_name}' is unstable for "
-                "structured RAGAS prompts. Set RAGAS_LLM_MODEL_NAME to a text-only model to enable RAGAS."
-            )
-            logger.warning(message)
-            return {
-                "enabled": False,
-                "aggregate": {},
-                "per_sample": [],
-                "results_path": "",
-                "error": message,
-            }
-        ragas_metrics = [
-            copy.deepcopy(faithfulness),
-            copy.deepcopy(answer_relevancy),
-            copy.deepcopy(context_precision),
-            copy.deepcopy(context_recall),
-            copy.deepcopy(answer_correctness),
-        ]
-        for metric in ragas_metrics:
-            if hasattr(metric, "llm"):
-                metric.llm = ragas_llm
-            if hasattr(metric, "embeddings"):
-                if getattr(metric, "name", "") == "answer_relevancy":
-                    metric.embeddings = _RagasRelevancyEmbeddingAdapter(ragas_embeddings)
-                    # Lower question generation fan-out to reduce eval latency/timeouts.
-                    if hasattr(metric, "strictness"):
-                        metric.strictness = 1
-                else:
-                    metric.embeddings = ragas_embeddings
-        dataset = EvaluationDataset.from_list(ragas_samples, name=f"{run_id}-ragas")
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=DeprecationWarning, module="ragas")
-            run_config = RunConfig(timeout=180, max_retries=1, max_workers=4)
-            eval_result = await aevaluate(
-                dataset=dataset,
-                metrics=ragas_metrics,
-                run_config=run_config,
-                raise_exceptions=False,
-                show_progress=True,
-            )
-
-        per_sample: list[dict] = []
-        for raw_scores in eval_result.scores:
-            row_scores: dict[str, float | None] = {}
-            for metric_name in RAGAS_METRIC_NAMES:
-                row_scores[metric_name] = _to_finite_float(raw_scores.get(metric_name))
-            per_sample.append(row_scores)
-
-        aggregate: dict[str, float | None] = {}
-        for metric_name in RAGAS_METRIC_NAMES:
-            values = [row[metric_name] for row in per_sample if row.get(metric_name) is not None]
-            aggregate[f"ragas_{metric_name}"] = sum(values) / len(values) if values else None
-
-        ragas_rows: list[dict] = []
-        for idx, sample_id in enumerate(sample_ids):
-            ragas_rows.append(
-                {
-                    "sample_id": sample_id,
-                    "scores": per_sample[idx] if idx < len(per_sample) else {},
-                }
-            )
-
-        ragas_path = settings.eval_runs_dir / f"{run_id}.ragas.jsonl"
-        write_jsonl(ragas_path, ragas_rows)
-        return {
-            "enabled": True,
-            "aggregate": aggregate,
-            "per_sample": per_sample,
-            "results_path": str(ragas_path),
-            "error": "",
-        }
-    except Exception as exc:
-        logger.exception("RAGAS evaluation failed")
-        return {
-            "enabled": False,
-            "aggregate": {},
-            "per_sample": [],
-            "results_path": "",
-            "error": str(exc),
-        }
-    finally:
-        for name, client in [("ragas_llm_client", llm_client), ("ragas_embedding_client", embedding_client)]:
-            try:
-                await client.close()
-            except RuntimeError as exc:
-                # Guard against anyio/httpx transport shutdown race in some environments.
-                logger.debug("Ignoring %s close RuntimeError: %s", name, exc)
-            except Exception:
-                logger.exception("Failed to close %s", name)
-
-
 async def run_eval(
     runtime: RuntimeClients,
     settings: Settings,
-    tracker: WeaveTracker,
     variant: str,
     max_samples: int | None,
     run_name: str | None,
-    with_ragas: bool = True,
 ) -> dict:
     samples = load_samples(settings, max_samples=max_samples)
     if not samples:
@@ -1351,8 +1054,6 @@ async def run_eval(
 
     latencies: list[float] = []
     rows: list[dict] = []
-    ragas_samples: list[dict] = []
-    ragas_sample_ids: list[str] = []
 
     run_id = run_name or f"{variant}-{int(time.time())}"
     results_path = settings.eval_runs_dir / f"{run_id}.jsonl"
@@ -1372,8 +1073,8 @@ async def run_eval(
             filter_doc_page_ids=sample.retrieval_scope_doc_page_ids,
             filter_document_ids=sample.retrieval_scope_document_ids,
         )
-        reranked = await rerank_candidates(runtime, settings, query=sample.question, fused_hits=retrieval["fused_hits"])
-        answer_result = await generate_answer(runtime, settings, query=sample.question, hits=reranked)
+        fused_hits = retrieval["fused_hits"][: settings.top_k]
+        answer_result = await generate_answer(runtime, settings, query=sample.question, hits=fused_hits)
 
         latency_s = time.monotonic() - t0
         latencies.append(latency_s)
@@ -1384,7 +1085,7 @@ async def run_eval(
             question=sample.question,
             raw_answer=answer_result["answer"],
         )
-        retrieved_doc_page_ids = [hit.get("doc_page_id", "") for hit in reranked]
+        retrieved_doc_page_ids = [hit.get("doc_page_id", "") for hit in fused_hits]
 
         row = {
             "sample_id": sample.sample_id,
@@ -1399,20 +1100,6 @@ async def run_eval(
         }
         rows.append(row)
 
-        if with_ragas:
-            ragas_samples.append(
-                {
-                    "user_input": sample.question,
-                    "response": _truncate_to_token_budget(str(prediction or "").strip(), token_budget=RAGAS_RESPONSE_TOKEN_BUDGET),
-                    "reference": _truncate_to_token_budget(
-                        str(sample.answers[0] if sample.answers else "").strip(),
-                        token_budget=RAGAS_REFERENCE_TOKEN_BUDGET,
-                    ),
-                    "retrieved_contexts": _build_ragas_contexts(reranked),
-                }
-            )
-            ragas_sample_ids.append(sample.sample_id)
-
     logger.info("Computing EM/F1 using evaluate[squad] and Recall@5 using pytrec_eval")
     qa_per_row, qa_aggregate = _compute_qa_scores(rows)
     recall_per_row, recall_aggregate = _compute_recall_at_5_scores(rows)
@@ -1423,26 +1110,6 @@ async def run_eval(
         row["scores"]["exact_match"] = qa_per_row[idx]["exact_match"]
         row["scores"]["f1"] = qa_per_row[idx]["f1"]
         row["scores"]["recall_at_5"] = recall_per_row[idx]
-
-    ragas_output = {
-        "enabled": False,
-        "aggregate": {},
-        "per_sample": [],
-        "results_path": "",
-        "error": "",
-    }
-    if with_ragas:
-        logger.info("Running RAGAS evaluation on %d samples", len(ragas_samples))
-        ragas_output = await _run_ragas_eval(settings, run_id=run_id, ragas_samples=ragas_samples, sample_ids=ragas_sample_ids)
-        per_sample_ragas = ragas_output.get("per_sample", [])
-        for idx, row in enumerate(rows):
-            ragas_scores = per_sample_ragas[idx] if idx < len(per_sample_ragas) else {}
-            if not ragas_scores:
-                continue
-            row["ragas"] = ragas_scores
-            for metric_name, metric_value in ragas_scores.items():
-                if metric_value is not None:
-                    row["scores"][f"ragas_{metric_name}"] = metric_value
 
     with open(results_path, "w", encoding="utf-8") as writer:
         for row in rows:
@@ -1462,14 +1129,6 @@ async def run_eval(
         "generated_at": int(time.time()),
     }
 
-    metrics["ragas_enabled"] = with_ragas
-    if with_ragas:
-        metrics.update(ragas_output.get("aggregate", {}))
-        metrics["ragas_results_path"] = ragas_output.get("results_path", "")
-        if ragas_output.get("error"):
-            metrics["ragas_error"] = ragas_output["error"]
-
     summary_path = settings.eval_runs_dir / f"{run_id}.summary.json"
     summary_path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding="utf-8")
-    tracker.publish(metrics, name=f"eval-{run_id}")
     return metrics

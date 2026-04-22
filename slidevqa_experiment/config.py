@@ -77,8 +77,6 @@ class Settings:
     es_url: str
     qdrant_url: str
     top_k: int
-    rerank_top_k: int
-    use_reranker: bool
     bm25_rrf_weight: float
     dense_rrf_weight: float
     image_rrf_weight: float
@@ -107,17 +105,9 @@ class Settings:
     qwen_multimodal_embed_model: str
     qwen_multimodal_query_instruction: str
     qwen_multimodal_document_instruction: str
-    qwen_rerank_base_url: str
-    qwen_rerank_api_key: str
-    qwen_rerank_model: str
-    qwen_rerank_query_instruction: str
     vllm_base_url: str
     vllm_model_name: str
     vllm_seed: int | None
-    ragas_llm_base_url: str
-    ragas_llm_model_name: str
-    wandb_api_key: str
-    weave_project: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -152,26 +142,24 @@ class Settings:
             es_url=_env_get(("es_url", "ES_URL"), "http://localhost:9200"),
             qdrant_url=_env_get(("qdrant_url", "QDRANT_URL"), "http://localhost:6333"),
             top_k=_env_int(("top_k", "TOP_K"), 20),
-            rerank_top_k=_env_int(("rerank_top_k", "RERANK_TOP_K"), 5),
-            use_reranker=_env_bool(("use_reranker", "USE_RERANKER"), False),
             bm25_rrf_weight=_env_float(("bm25_rrf_weight", "BM25_RRF_WEIGHT"), 1.0),
             dense_rrf_weight=_env_float(("dense_rrf_weight", "DENSE_RRF_WEIGHT"), 1.0),
             image_rrf_weight=_env_float(("image_rrf_weight", "IMAGE_RRF_WEIGHT"), 1.0),
             proxy_rrf_weight=_env_float(("proxy_rrf_weight", "PROXY_RRF_WEIGHT"), 0.35),
             proxy_dense_rrf_weight=_env_float(("proxy_dense_rrf_weight", "PROXY_DENSE_RRF_WEIGHT"), 0.5),
-            qdrant_text_vector_size=_env_int(("qdrant_text_vector_size", "QDRANT_TEXT_VECTOR_SIZE"), 1024),
-            qdrant_image_vector_size=_env_int(("qdrant_image_vector_size", "QDRANT_IMAGE_VECTOR_SIZE"), 1024),
+            qdrant_text_vector_size=_env_int(("qdrant_text_vector_size", "QDRANT_TEXT_VECTOR_SIZE"), 2560),
+            qdrant_image_vector_size=_env_int(("qdrant_image_vector_size", "QDRANT_IMAGE_VECTOR_SIZE"), 2048),
             use_page_image=_env_bool(("use_page_image", "USE_PAGE_IMAGE"), True),
-            build_page_workers=_env_int(("build_page_workers", "BUILD_PAGE_WORKERS"), 4),
-            build_llm_concurrency=_env_int(("build_llm_concurrency", "BUILD_LLM_CONCURRENCY"), 6),
-            build_embed_concurrency=_env_int(("build_embed_concurrency", "BUILD_EMBED_CONCURRENCY"), 2),
+            build_page_workers=_env_int(("build_page_workers", "BUILD_PAGE_WORKERS"), 16),
+            build_llm_concurrency=_env_int(("build_llm_concurrency", "BUILD_LLM_CONCURRENCY"), 16),
+            build_embed_concurrency=_env_int(("build_embed_concurrency", "BUILD_EMBED_CONCURRENCY"), 4),
             text_embed_batch_size=_env_int(("text_embed_batch_size", "TEXT_EMBED_BATCH_SIZE"), 256),
             image_embed_batch_size=_env_int(("image_embed_batch_size", "IMAGE_EMBED_BATCH_SIZE"), 64),
-            qdrant_upsert_batch_size=_env_int(("qdrant_upsert_batch_size", "QDRANT_UPSERT_BATCH_SIZE"), 1024),
+            qdrant_upsert_batch_size=_env_int(("qdrant_upsert_batch_size", "QDRANT_UPSERT_BATCH_SIZE"), 128),
             es_bulk_ops_batch_size=_env_int(("es_bulk_ops_batch_size", "ES_BULK_OPS_BATCH_SIZE"), 4000),
-            ocr_max_tokens=_env_int(("ocr_max_tokens", "OCR_MAX_TOKENS"), 2048),
-            contextual_chunk_max_tokens=_env_int(("contextual_chunk_max_tokens", "CONTEXTUAL_CHUNK_MAX_TOKENS"), 512),
-            page_proxy_max_tokens=_env_int(("page_proxy_max_tokens", "PAGE_PROXY_MAX_TOKENS"), 512),
+            ocr_max_tokens=_env_int(("ocr_max_tokens", "OCR_MAX_TOKENS"), 4096),
+            contextual_chunk_max_tokens=_env_int(("contextual_chunk_max_tokens", "CONTEXTUAL_CHUNK_MAX_TOKENS"), 768),
+            page_proxy_max_tokens=_env_int(("page_proxy_max_tokens", "PAGE_PROXY_MAX_TOKENS"), 768),
             qwen_embed_base_url=_env_get(("qwen_embed_base_url", "QWEN_EMBED_BASE_URL"), "http://localhost:8002/v1"),
             qwen_embed_api_key=_env_get(("qwen_embed_api_key", "QWEN_EMBED_API_KEY"), "EMPTY"),
             qwen_embed_model=_env_get(("qwen_embed_model", "QWEN_EMBED_MODEL"), "Qwen/Qwen3-Embedding-4B"),
@@ -203,20 +191,9 @@ class Settings:
                 ("qwen_multimodal_document_instruction", "QWEN_MULTIMODAL_DOCUMENT_INSTRUCTION"),
                 "Represent the document page for retrieval.",
             ),
-            qwen_rerank_base_url=_env_get(("qwen_rerank_base_url", "QWEN_RERANK_BASE_URL"), "http://localhost:8004"),
-            qwen_rerank_api_key=_env_get(("qwen_rerank_api_key", "QWEN_RERANK_API_KEY"), ""),
-            qwen_rerank_model=_env_get(("qwen_rerank_model", "QWEN_RERANK_MODEL"), "Qwen/Qwen3-Reranker-0.6B"),
-            qwen_rerank_query_instruction=_env_get(
-                ("qwen_rerank_query_instruction", "QWEN_RERANK_QUERY_INSTRUCTION"),
-                "",
-            ),
             vllm_base_url=_env_get(("vllm_base_url", "VLLM_BASE_URL"), "http://localhost:8001/v1"),
             vllm_model_name=_env_get(("vllm_model_name", "VLLM_MODEL_NAME"), "qwen3.5-35b-a3b"),
             vllm_seed=_env_optional_int(("vllm_seed", "VLLM_SEED")),
-            ragas_llm_base_url=_env_get(("ragas_llm_base_url", "RAGAS_LLM_BASE_URL"), ""),
-            ragas_llm_model_name=_env_get(("ragas_llm_model_name", "RAGAS_LLM_MODEL_NAME"), ""),
-            wandb_api_key=_env_get(("wandb_api_key", "WANDB_API_KEY"), ""),
-            weave_project=_env_get(("weave_project", "WEAVE_PROJECT"), "context-rag"),
         )
 
     def ensure_dirs(self) -> None:
