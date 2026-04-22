@@ -41,12 +41,6 @@ hf download NTT-hil-insight/SlideVQA --repo-type=dataset --local-dir /data/Slide
 uv run scripts/prepare_eval_dataset.py --slidevqa-dir /data/SlideVQA --slidevqa-split test --overwrite
 ```
 
-快速集默认使用：
-
-```bash
-DATASET_DIR=./data/downloads/slidevqa_quick
-```
-
 ## 建库
 
 ```bash
