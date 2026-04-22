@@ -44,15 +44,15 @@ uv run scripts/prepare_eval_dataset.py --slidevqa-dir /data/SlideVQA --slidevqa-
 ## 建库
 
 ```bash
-DATASET_DIR=./data/downloads/slidevqa_quick uv run run-slidevqa-experiment build --variant baseline --rebuild
-DATASET_DIR=./data/downloads/slidevqa_quick uv run run-slidevqa-experiment build --variant enhanced --rebuild
+uv run run-slidevqa-experiment build --variant baseline --rebuild
+uv run run-slidevqa-experiment build --variant enhanced --rebuild
 ```
 
 ## 评测
 
 ```bash
-DATASET_DIR=./data/downloads/slidevqa_quick uv run run-slidevqa-experiment eval --variant baseline
-DATASET_DIR=./data/downloads/slidevqa_quick uv run run-slidevqa-experiment eval --variant enhanced
+uv run run-slidevqa-experiment eval --variant baseline
+uv run run-slidevqa-experiment eval --variant enhanced
 ```
 
 
