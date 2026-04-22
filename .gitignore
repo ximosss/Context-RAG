@@ -1,0 +1,26 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+
+# Local env
+.env
+.venv/
+
+# Local workspace/editor
+.vscode/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+.ruff_cache
+.claude
+.codex
+
+data/downloads/*
+data/eval_runs/*
+data/experiments/*
+
+notebooks/
+wandb/

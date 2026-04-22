@@ -1,0 +1,152 @@
+x-vllm-common: &vllm-common
+  image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+  pull_policy: never
+  gpus: all
+  ipc: host
+  shm_size: "8gb"
+  restart: unless-stopped
+  volumes:
+    - /data:/data:ro
+  healthcheck:
+    test:
+      [
+        "CMD-SHELL",
+        "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/models', timeout=3).read()\" || exit 1",
+      ]
+    interval: 20s
+    timeout: 10s
+    retries: 20
+    start_period: 180s
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
+    pull_policy: never
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - ES_JAVA_OPTS=${ES_JAVA_OPTS:--Xms2g -Xmx2g}
+    ports:
+      - "9200:9200"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    pull_policy: never
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  qwen_vl:
+    <<: *vllm-common
+    ports:
+      - "8001:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=${QWEN_VL_CUDA_VISIBLE_DEVICES:-0}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - NCCL_P2P_DISABLE=1
+    command:
+      - ${QWEN_VL_MODEL_DIR:-/data/qwen3.5-35b-a3b}
+      - --served-model-name
+      - ${QWEN_VL_MODEL_NAME:-qwen3.5-35b-a3b}
+      - --tensor-parallel-size
+      - ${QWEN_VL_TENSOR_PARALLEL_SIZE:-1}
+      - --max-model-len
+      - ${QWEN_VL_MAX_MODEL_LEN:-65536}
+      - --gpu-memory-utilization
+      - ${QWEN_VL_GPU_MEMORY_UTILIZATION:-0.85}
+      - --cpu-offload-gb
+      - ${QWEN_VL_CPU_OFFLOAD_GB:-2}
+      - --trust-remote-code
+      - --enforce-eager
+      - --disable-custom-all-reduce
+      - --mm-processor-cache-gb
+      - "0"
+      - --reasoning-parser
+      - qwen3
+      - --default-chat-template-kwargs
+      - '{"enable_thinking": false}'
+
+
+  qwen_embed:
+    <<: *vllm-common
+    ports:
+      - "8002:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=${QWEN_EMBED_CUDA_VISIBLE_DEVICES:-1}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    command:
+      - ${QWEN_EMBED_MODEL_DIR:-/data/qwen3-embedding-4b}
+      - --served-model-name
+      - ${QWEN_EMBED_MODEL_NAME:-Qwen/Qwen3-Embedding-4B}
+      - --runner
+      - pooling
+      - --convert
+      - embed
+      - --max-model-len
+      - ${QWEN_EMBED_MAX_MODEL_LEN:-8192}
+      - --gpu-memory-utilization
+      - ${QWEN_EMBED_GPU_MEMORY_UTILIZATION:-0.75}
+      - --trust-remote-code
+
+  qwen_multimodal_embed:
+    <<: *vllm-common
+    ports:
+      - "8003:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=${QWEN_MM_EMBED_CUDA_VISIBLE_DEVICES:-1}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    command:
+      - ${QWEN_MM_EMBED_MODEL_DIR:-/data/qwen3-vl-embedding-2b}
+      - --served-model-name
+      - ${QWEN_MM_EMBED_MODEL_NAME:-Qwen/Qwen3-VL-Embedding-2B}
+      - --runner
+      - pooling
+      - --convert
+      - embed
+      - --max-model-len
+      - ${QWEN_MM_EMBED_MAX_MODEL_LEN:-8192}
+      - --gpu-memory-utilization
+      - ${QWEN_MM_EMBED_GPU_MEMORY_UTILIZATION:-0.70}
+      - --trust-remote-code
+
+  qwen_rerank:
+    <<: *vllm-common
+    ports:
+      - "8004:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=${QWEN_RERANK_CUDA_VISIBLE_DEVICES:-0}
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    command:
+      - ${QWEN_RERANK_MODEL_DIR:-/data/qwen3-reranker-0.6b}
+      - --served-model-name
+      - ${QWEN_RERANK_MODEL_NAME:-Qwen/Qwen3-Reranker-0.6B}
+      - --runner
+      - pooling
+      - --max-model-len
+      - ${QWEN_RERANK_MAX_MODEL_LEN:-4096}
+      - --gpu-memory-utilization
+      - ${QWEN_RERANK_GPU_MEMORY_UTILIZATION:-0.10}
+      - --trust-remote-code
+
+volumes:
+  esdata:
+  qdrantdata:
