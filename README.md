@@ -23,7 +23,7 @@
 | enhanced | 80.56% | 80.66% | 98.61% | 10.044s | 17.094s | 
 
 更多细节参考项目的报告: https://wandb.ai/ximo_ml/context-rag/reports/Context-RAG-SlideVQA-2026-04-15---VmlldzoxNjY0NDgzOQ
->>>>>>> 0fb6b9f (update readme)
+
 
 当前代码对应的核心差异：
 
