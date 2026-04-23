@@ -15,12 +15,6 @@
 
 ## 主要结果
 
-<<<<<<< HEAD
-| Variant | EM | F1 | Recall@5 | 
-| --- | ---: | ---: | ---: |
-| baseline | 0.7222 | 0.7222 | 0.9861 | 
-| enhanced | 0.8056 | 0.8056 | 0.9861 | 
-=======
 测试用的数据集为[SlideVQA](https://huggingface.co/datasets/NTT-hil-insight/SlideVQA)部分子集
 
 | 方案 | EM | F1 | Recall@5 | 平均延迟 | P95 延迟 | 
