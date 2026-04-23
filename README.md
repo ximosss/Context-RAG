@@ -22,7 +22,7 @@
 | baseline | 69.44% | 71.53% | 98.61% | 9.784s | 17.133s | 
 | enhanced | 80.56% | 80.66% | 98.61% | 10.044s | 17.094s | 
 
-更多细节参考项目的报告: https://wandb.ai/ximo_ml/context-rag/reports/Context-RAG-SlideVQA-2026-04-15---VmlldzoxNjY0NDgzOQ
+更多细节参考项目的报告: https://wandb.ai/ximo_ml/context-rag/reports/Context-RAG-SlideVQA-2026-04-15---VmlldzoxNjY0NDgzOQ?accessToken=hu3bs41bqqpacz7mrublec81nfbr2jll8hzsaotqfycl6ppx176yp9uaxyilmgj4
 
 
 当前代码对应的核心差异：
