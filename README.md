@@ -1,4 +1,3 @@
-> RAG是个垃圾的技术. 总结来说, 使用简单和机械的相似度算法而抛弃掉LLM大量的先验知识不利用显得非常愚蠢. 现在来看, 绝大多数场景下建立复杂的RAG pipeline带来的收益显然不如多开几个subagent直接查找. 
 
 # Context-Multimodal-RAG
 
